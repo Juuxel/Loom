@@ -24,6 +24,8 @@
 
 package net.fabricmc.loom.task;
 
+import java.io.File;
+
 import org.gradle.api.file.RegularFileProperty;
 import org.gradle.api.provider.Property;
 import org.gradle.api.tasks.Input;
@@ -38,6 +40,7 @@ import net.fabricmc.loom.util.SourceRemapper;
 public class RemapSourcesJarTask extends AbstractLoomTask {
 	private final RegularFileProperty input = getProject().getObjects().fileProperty();
 	private final RegularFileProperty output = getProject().getObjects().fileProperty().convention(input);
+	private final RegularFileProperty unremappedSourceOutput = getProject().getObjects().fileProperty().convention(getProject().getLayout().file(getProject().provider(this::getDevJarPath)));
 	private final Property<String> targetNamespace = getProject().getObjects().property(String.class).convention(MappingsNamespace.INTERMEDIARY.toString());
 	private SourceRemapper sourceRemapper = null;
 	private final Property<Boolean> preserveFileTimestamps = getProject().getObjects().property(Boolean.class).convention(true);
@@ -46,13 +49,19 @@ public class RemapSourcesJarTask extends AbstractLoomTask {
 	public RemapSourcesJarTask() {
 	}
 
+	private File getDevJarPath() {
+		File regularOutput = output.get().getAsFile();
+		String fileName = regularOutput.getName();
+		return new File(regularOutput.getParentFile(), fileName.substring(0, fileName.lastIndexOf('.')) + "-dev.jar");
+	}
+
 	@TaskAction
 	public void remap() throws Exception {
 		if (sourceRemapper == null) {
 			String direction = targetNamespace.get();
-			SourceRemapper.remapSources(getProject(), input.get().getAsFile(), output.get().getAsFile(), direction.equals(MappingsNamespace.NAMED.toString()), reproducibleFileOrder.get(), preserveFileTimestamps.get());
+			SourceRemapper.remapSources(getProject(), input.get().getAsFile(), output.get().getAsFile(), unremappedSourceOutput.get().getAsFile(), direction.equals(MappingsNamespace.NAMED.toString()), reproducibleFileOrder.get(), preserveFileTimestamps.get());
 		} else {
-			sourceRemapper.scheduleRemapSources(input.get().getAsFile(), output.get().getAsFile(), reproducibleFileOrder.get(), preserveFileTimestamps.get());
+			sourceRemapper.scheduleRemapSources(input.get().getAsFile(), output.get().getAsFile(), unremappedSourceOutput.get().getAsFile(), reproducibleFileOrder.get(), preserveFileTimestamps.get());
 		}
 	}
 
@@ -79,6 +88,11 @@ public class RemapSourcesJarTask extends AbstractLoomTask {
 	@Input
 	public Property<String> getTargetNamespace() {
 		return targetNamespace;
+	}
+
+	@OutputFile
+	public RegularFileProperty getUnremappedSourceOutput() {
+		return unremappedSourceOutput;
 	}
 
 	@Input

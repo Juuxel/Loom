@@ -37,6 +37,7 @@ import org.cadixdev.lorenz.MappingSet;
 import org.cadixdev.mercury.Mercury;
 import org.cadixdev.mercury.remapper.MercuryRemapper;
 import org.gradle.api.Project;
+import org.jetbrains.annotations.Nullable;
 
 import net.fabricmc.loom.LoomGradleExtension;
 import net.fabricmc.loom.api.mappings.layered.MappingsNamespace;
@@ -58,17 +59,21 @@ public class SourceRemapper {
 		this.toNamed = toNamed;
 	}
 
-	public static void remapSources(Project project, File input, File output, boolean named, boolean reproducibleFileOrder, boolean preserveFileTimestamps) {
+	public static void remapSources(Project project, File input, File output, @Nullable File rawSourcesDestinationForInPlaceRemap, boolean named, boolean reproducibleFileOrder, boolean preserveFileTimestamps) {
 		SourceRemapper sourceRemapper = new SourceRemapper(project, named);
-		sourceRemapper.scheduleRemapSources(input, output, reproducibleFileOrder, preserveFileTimestamps);
+		sourceRemapper.scheduleRemapSources(input, output, rawSourcesDestinationForInPlaceRemap, reproducibleFileOrder, preserveFileTimestamps);
 		sourceRemapper.remapAll();
 	}
 
 	public void scheduleRemapSources(File source, File destination, boolean reproducibleFileOrder, boolean preserveFileTimestamps) {
+		scheduleRemapSources(source, destination, null, reproducibleFileOrder, preserveFileTimestamps);
+	}
+
+	public void scheduleRemapSources(File source, File destination, @Nullable File rawSourcesDestinationForInPlaceRemap, boolean reproducibleFileOrder, boolean preserveFileTimestamps) {
 		remapTasks.add((logger) -> {
 			try {
 				logger.progress("remapping sources - " + source.getName());
-				remapSourcesInner(source, destination);
+				remapSourcesInner(source, destination, rawSourcesDestinationForInPlaceRemap);
 				ZipReprocessorUtil.reprocessZip(destination, reproducibleFileOrder, preserveFileTimestamps);
 
 				// Set the remapped sources creation date to match the sources if we're likely succeeded in making it
@@ -99,16 +104,18 @@ public class SourceRemapper {
 		System.gc();
 	}
 
-	private void remapSourcesInner(File source, File destination) throws Exception {
+	private void remapSourcesInner(File source, File destination, @Nullable File rawSourcesDestinationForInPlaceRemap) throws Exception {
 		project.getLogger().info(":remapping source jar");
 		Mercury mercury = getMercuryInstance();
 
 		if (source.equals(destination)) {
 			if (source.isDirectory()) {
 				throw new RuntimeException("Directories must differ!");
+			} else if (rawSourcesDestinationForInPlaceRemap == null) {
+				source = new File(destination.getAbsolutePath().substring(0, destination.getAbsolutePath().lastIndexOf('.')) + "-dev.jar");
+			} else {
+				source = rawSourcesDestinationForInPlaceRemap;
 			}
-
-			source = new File(destination.getAbsolutePath().substring(0, destination.getAbsolutePath().lastIndexOf('.')) + "-dev.jar");
 
 			try {
 				com.google.common.io.Files.move(destination, source);
