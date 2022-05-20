@@ -59,6 +59,14 @@ public interface StepLogic {
 		return stepName;
 	}
 
+	default boolean needsMinecraftLibraries() {
+		return false;
+	}
+
+	default boolean isNoOp() {
+		return false;
+	}
+
 	interface ExecutionContext {
 		Logger logger();
 		Path setOutput(String fileName) throws IOException;
@@ -177,6 +185,11 @@ public interface StepLogic {
 				}
 			}
 		}
+
+		@Override
+		public boolean needsMinecraftLibraries() {
+			return true;
+		}
 	}
 
 	/**
@@ -202,6 +215,11 @@ public interface StepLogic {
 		@Override
 		public void execute(ExecutionContext context) throws IOException {
 		}
+
+		@Override
+		public boolean isNoOp() {
+			return true;
+		}
 	}
 
 	/**
@@ -218,6 +236,11 @@ public interface StepLogic {
 		@Override
 		public void execute(ExecutionContext context) throws IOException {
 			context.setOutput(path.get());
+		}
+
+		@Override
+		public boolean isNoOp() {
+			return true;
 		}
 	}
 }

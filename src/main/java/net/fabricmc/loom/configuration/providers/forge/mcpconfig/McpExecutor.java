@@ -27,15 +27,20 @@ package net.fabricmc.loom.configuration.providers.forge.mcpconfig;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.UncheckedIOException;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 import com.google.common.base.Stopwatch;
 import com.google.common.hash.Hashing;
@@ -60,6 +65,7 @@ public final class McpExecutor {
 	private final List<McpConfigStep> steps;
 	private final Map<String, McpConfigFunction> functions;
 	private final Map<String, String> extraConfig = new HashMap<>();
+	private Set<File> minecraftLibraries;
 
 	public McpExecutor(Project project, MinecraftPatchedProvider.MinecraftProviderBridge minecraftProvider, Path cache, List<McpConfigStep> steps, Map<String, McpConfigFunction> functions) {
 		this.project = project;
@@ -107,32 +113,85 @@ public final class McpExecutor {
 		});
 	}
 
-	public Path executeUpTo(String step) throws IOException {
+	public Path executeUpTo(String step) throws Exception {
 		extraConfig.clear();
+		Stopwatch outerStopwatch = Stopwatch.createStarted();
+		ExecutorService executorService = Executors.newFixedThreadPool(Math.max(1, Runtime.getRuntime().availableProcessors()));
 
 		// Find the total number of steps we need to execute.
 		int totalSteps = CollectionUtil.find(steps, s -> s.name().equals(step))
 				.map(s -> steps.indexOf(s) + 1)
 				.orElse(steps.size());
-		int currentStepIndex = 0;
-
+		int[] currentStepIndex = new int[1];
 		project.getLogger().log(STEP_LOG_LEVEL, ":executing {} MCP steps", totalSteps);
 
-		for (McpConfigStep currentStep : steps) {
-			currentStepIndex++;
-			StepLogic stepLogic = getStepLogic(currentStep.type());
-			project.getLogger().log(STEP_LOG_LEVEL, ":step {}/{} - {}", currentStepIndex, totalSteps, stepLogic.getDisplayName(currentStep.name()));
+		Map<String, CompletableFuture<Void>> futures = new HashMap<>();
 
-			Stopwatch stopwatch = Stopwatch.createStarted();
-			stepLogic.execute(new ExecutionContextImpl(currentStep));
-			project.getLogger().log(STEP_LOG_LEVEL, ":{} done in {}", currentStep.name(), stopwatch.stop());
+		for (McpConfigStep currentStep : steps) {
+			StepLogic stepLogic = getStepLogic(currentStep.type());
+			Stopwatch stopwatch = Stopwatch.createUnstarted();
+
+			if (stepLogic.needsMinecraftLibraries()) {
+				markStepStart(currentStepIndex, totalSteps, currentStep, stepLogic, stopwatch);
+				resolveMinecraftLibraries();
+			}
+
+			CompletableFuture<Void> future;
+
+			if (stepLogic.isNoOp()) {
+				executeStep(currentStepIndex, totalSteps, currentStep, stepLogic, stopwatch);
+				future = CompletableFuture.completedFuture(null);
+			} else {
+				List<CompletableFuture<?>> stepDependencies = new ArrayList<>();
+
+				currentStep.config().forEach((key, value) -> {
+					if (value instanceof ConfigValue.Variable var && var.name().endsWith(ConfigValue.PREVIOUS_OUTPUT_SUFFIX)) {
+						String name = var.name().substring(0, var.name().length() - ConfigValue.PREVIOUS_OUTPUT_SUFFIX.length());
+						stepDependencies.add(futures.get(name));
+					}
+				});
+
+				future = CompletableFuture.allOf(stepDependencies.toArray(CompletableFuture<?>[]::new))
+						.thenRunAsync(() -> {
+							try {
+								executeStep(currentStepIndex, totalSteps, currentStep, stepLogic, stopwatch);
+							} catch (IOException e) {
+								throw new UncheckedIOException(e);
+							}
+						}, executorService);
+			}
+
+			futures.put(currentStep.name(), future);
 
 			if (currentStep.name().equals(step)) {
 				break;
 			}
 		}
 
-		return Path.of(extraConfig.get(ConfigValue.OUTPUT));
+		CompletableFuture.allOf(futures.values().toArray(CompletableFuture<?>[]::new)).get();
+		executorService.shutdownNow();
+
+		project.getLogger().log(STEP_LOG_LEVEL, ":MCP steps done in {}", outerStopwatch.stop());
+		return Path.of(extraConfig.get(step + ConfigValue.PREVIOUS_OUTPUT_SUFFIX));
+	}
+
+	private void markStepStart(int[] currentStepIndex, int totalSteps, McpConfigStep currentStep, StepLogic stepLogic, Stopwatch stopwatch) {
+		if (!stopwatch.isRunning()) {
+			project.getLogger().log(STEP_LOG_LEVEL, ":step {}/{} - {}", ++currentStepIndex[0], totalSteps, stepLogic.getDisplayName(currentStep.name()));
+			stopwatch.start();
+		}
+	}
+
+	private void executeStep(int[] currentStepIndex, int totalSteps, McpConfigStep currentStep, StepLogic stepLogic, Stopwatch stopwatch) throws IOException {
+		markStepStart(currentStepIndex, totalSteps, currentStep, stepLogic, stopwatch);
+		stepLogic.execute(new ExecutionContextImpl(currentStep));
+		project.getLogger().log(STEP_LOG_LEVEL, ":{} done in {}", currentStep.name(), stopwatch.stop());
+	}
+
+	private void resolveMinecraftLibraries() {
+		if (minecraftLibraries == null) {
+			minecraftLibraries = project.getConfigurations().getByName(Constants.Configurations.MINECRAFT_DEPENDENCIES).resolve();
+		}
 	}
 
 	private StepLogic getStepLogic(String type) {
@@ -156,6 +215,7 @@ public final class McpExecutor {
 
 	private class ExecutionContextImpl implements StepLogic.ExecutionContext {
 		private final McpConfigStep step;
+		private Path output;
 
 		ExecutionContextImpl(McpConfigStep step) {
 			this.step = step;
@@ -174,8 +234,8 @@ public final class McpExecutor {
 
 		@Override
 		public Path setOutput(Path output) {
+			this.output = output;
 			String absolutePath = output.toAbsolutePath().toString();
-			extraConfig.put(ConfigValue.OUTPUT, absolutePath);
 			extraConfig.put(step.name() + ConfigValue.PREVIOUS_OUTPUT_SUFFIX, absolutePath);
 			return output;
 		}
@@ -187,6 +247,10 @@ public final class McpExecutor {
 
 		@Override
 		public String resolve(ConfigValue value) {
+			if (value instanceof ConfigValue.Variable var && var.name().equals(ConfigValue.OUTPUT)) {
+				return output.toAbsolutePath().toString();
+			}
+
 			return McpExecutor.this.resolve(step, value);
 		}
 
@@ -224,7 +288,7 @@ public final class McpExecutor {
 
 		@Override
 		public Set<File> getMinecraftLibraries() {
-			return project.getConfigurations().getByName(Constants.Configurations.MINECRAFT_DEPENDENCIES).resolve();
+			return minecraftLibraries;
 		}
 	}
 }
