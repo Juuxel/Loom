@@ -58,7 +58,6 @@ public class LoomGradlePlugin implements BootstrappedPlugin {
 	@Override
 	public void apply(PluginAware target) {
 		target.getPlugins().apply(LoomRepositoryPlugin.class);
-
 		if (target instanceof Project project) {
 			apply(project);
 		}
