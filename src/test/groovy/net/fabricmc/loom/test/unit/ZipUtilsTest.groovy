@@ -32,6 +32,14 @@ import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 
 class ZipUtilsTest extends Specification {
+    def "lmao"() {
+        when:
+            def f = false
+
+        then:
+            f == true
+    }
+
     def "pack"() {
         given:
             def dir = File.createTempDir()
