@@ -324,27 +324,9 @@ tasks.withType(GenerateModuleMetadata) {
 // A task to output a json file with a list of all the test to run
 task writeActionsTestMatrix() {
 	doLast {
-		def testMatrix = ["net.fabricmc.loom.test.integration.DebugLineNumbersTest"]
-		/*
-		file('src/test/groovy/net/fabricmc/loom/test/integration').traverse {
-			if (it.name.endsWith("Test.groovy")) {
-				if (it.name.endsWith("ReproducibleBuildTest.groovy")) {
-					// This test gets a special case to run across all os's
-					return
-				}
-
-				if (it.name.endsWith("FabricAPITest.groovy")) {
-					// Arch: Disabled as it hangs
-					return
-				}
-
-				def className = it.path.toString().replace(".groovy", "")
-				className = className.substring(className.lastIndexOf("integration/") + "integration/".length()).replace('/', '.')
-
-				testMatrix.add("net.fabricmc.loom.test.integration.${className}")
-			}
-		}
-		 */
+		def testMatrix = [
+			"net.fabricmc.loom.test.integration.DebugLineNumbersTest"
+		]
 
 		// Run all the unit tests together
 		testMatrix.add("net.fabricmc.loom.test.unit.*")
