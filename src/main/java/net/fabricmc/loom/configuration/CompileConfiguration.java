@@ -1,7 +1,7 @@
 /*
  * This file is part of fabric-loom, licensed under the MIT License (MIT).
  *
- * Copyright (c) 2016-2023 FabricMC
+ * Copyright (c) 2016-2024 FabricMC
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -26,6 +26,7 @@ package net.fabricmc.loom.configuration;
 
 import static net.fabricmc.loom.util.Constants.Configurations;
 
+import java.io.File;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
@@ -39,11 +40,17 @@ import javax.inject.Inject;
 
 import org.gradle.api.GradleException;
 import org.gradle.api.Project;
+import org.gradle.api.artifacts.ConfigurationVariant;
+import org.gradle.api.artifacts.type.ArtifactTypeDefinition;
+import org.gradle.api.attributes.LibraryElements;
 import org.gradle.api.logging.Logger;
 import org.gradle.api.logging.Logging;
+import org.gradle.api.model.ObjectFactory;
 import org.gradle.api.plugins.JavaPlugin;
+import org.gradle.api.plugins.JavaPluginExtension;
 import org.gradle.api.tasks.AbstractCopyTask;
 import org.gradle.api.tasks.SourceSet;
+import org.gradle.api.tasks.SourceSetOutput;
 import org.gradle.api.tasks.TaskContainer;
 import org.gradle.api.tasks.compile.JavaCompile;
 import org.gradle.api.tasks.javadoc.Javadoc;
@@ -76,6 +83,8 @@ import net.fabricmc.loom.util.gradle.GradleUtils;
 import net.fabricmc.loom.util.gradle.SourceSetHelper;
 import net.fabricmc.loom.util.service.ScopedSharedServiceManager;
 import net.fabricmc.loom.util.service.SharedServiceManager;
+
+import org.jetbrains.annotations.Nullable;
 
 public abstract class CompileConfiguration implements Runnable {
 	@Inject
@@ -129,14 +138,37 @@ public abstract class CompileConfiguration implements Runnable {
 			}
 
 			configureDecompileTasks(configContext);
+
+			// Add the "dev" jar and classes to the "namedElements" configuration.
+			// Done in afterEvaluate to access all classes dirs from language plugins etc.
+			getProject().getConfigurations().named(Configurations.NAMED_ELEMENTS, configuration -> {
+				configuration.outgoing(outgoing -> {
+					outgoing.artifact(getTasks().named("jar"));
+					outgoing.getAttributes().attribute(ArtifactTypeDefinition.ARTIFACT_TYPE_ATTRIBUTE, ArtifactTypeDefinition.JAR_TYPE);
+
+					final ObjectFactory factory = getProject().getObjects();
+					final JavaPluginExtension java = getProject().getExtensions().getByType(JavaPluginExtension.class);
+					final SourceSetOutput output = java.getSourceSets().getByName(SourceSet.MAIN_SOURCE_SET_NAME).getOutput();
+					final ConfigurationVariant classes = outgoing.getVariants().maybeCreate("classes");
+					classes.getAttributes().attribute(LibraryElements.LIBRARY_ELEMENTS_ATTRIBUTE, factory.named(LibraryElements.class, LibraryElements.CLASSES));
+					classes.getAttributes().attribute(ArtifactTypeDefinition.ARTIFACT_TYPE_ATTRIBUTE, ArtifactTypeDefinition.JVM_CLASS_DIRECTORY);
+
+					for (File classesDir : output.getClassesDirs()) {
+						classes.artifact(classesDir);
+					}
+
+					final ConfigurationVariant resources = outgoing.getVariants().maybeCreate("resources");
+					resources.getAttributes().attribute(LibraryElements.LIBRARY_ELEMENTS_ATTRIBUTE, factory.named(LibraryElements.class, LibraryElements.RESOURCES));
+					resources.getAttributes().attribute(ArtifactTypeDefinition.ARTIFACT_TYPE_ATTRIBUTE, ArtifactTypeDefinition.JVM_RESOURCES_DIRECTORY);
+					final @Nullable File resourcesDir = output.getResourcesDir();
+					if (resourcesDir != null) resources.artifact(resourcesDir);
+				});
+			});
 		});
 
 		finalizedBy("idea", "genIdeaWorkspace");
 		finalizedBy("eclipse", "genEclipseRuns");
 		finalizedBy("cleanEclipse", "cleanEclipseRuns");
-
-		// Add the "dev" jar to the "namedElements" configuration
-		getProject().artifacts(artifactHandler -> artifactHandler.add(Configurations.NAMED_ELEMENTS, getTasks().named("jar")));
 
 		// Ensure that the encoding is set to UTF-8, no matter what the system default is
 		// this fixes some edge cases with special characters not displaying correctly
