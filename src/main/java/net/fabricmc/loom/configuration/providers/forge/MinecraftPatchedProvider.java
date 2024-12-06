@@ -1,7 +1,7 @@
 /*
  * This file is part of fabric-loom, licensed under the MIT License (MIT).
  *
- * Copyright (c) 2020-2023 FabricMC
+ * Copyright (c) 2020-2024 FabricMC
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -32,6 +32,7 @@ import java.io.OutputStream;
 import java.io.UncheckedIOException;
 import java.nio.file.FileSystem;
 import java.nio.file.Files;
+import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
@@ -389,20 +390,48 @@ public class MinecraftPatchedProvider {
 
 		try (var tempFiles = new TempFiles()) {
 			AccessTransformerJarProcessor.executeAt(project, input, target, args -> {
-				for (Path jar : atSources) {
-					byte[] atBytes = ZipUtils.unpackNullable(jar, Constants.Forge.ACCESS_TRANSFORMER_PATH);
-
-					if (atBytes != null) {
-						Path tmpFile = tempFiles.file("at-conf", ".cfg");
-						Files.write(tmpFile, atBytes, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
-						args.add("--atFile");
-						args.add(tmpFile.toAbsolutePath().toString());
-					}
+				for (String atFile : extractAccessTransformers(atSources, extension.getForgeUserdevProvider().getConfig().ats(), tempFiles)) {
+					args.add("--atFile");
+					args.add(atFile);
 				}
 			});
 		}
 
 		project.getLogger().lifecycle(":access transformed minecraft in " + stopwatch.stop());
+	}
+
+	private static List<String> extractAccessTransformers(List<Path> atSources, UserdevConfig.AccessTransformerLocation location, TempFiles tempFiles) throws IOException {
+		final List<String> extracted = new ArrayList<>();
+
+		for (Path jar : atSources) {
+			try (FileSystemUtil.Delegate fs = FileSystemUtil.getJarFileSystem(jar)) {
+				for (Path atFile : getAccessTransformerPaths(fs, location)) {
+					byte[] atBytes;
+
+					try {
+						atBytes = Files.readAllBytes(atFile);
+					} catch (NoSuchFileException e) {
+						continue;
+					}
+
+					Path tmpFile = tempFiles.file("at-conf", ".cfg");
+					Files.write(tmpFile, atBytes, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
+					extracted.add(tmpFile.toAbsolutePath().toString());
+				}
+			}
+		}
+
+		return extracted;
+	}
+
+	private static List<Path> getAccessTransformerPaths(FileSystemUtil.Delegate fs, UserdevConfig.AccessTransformerLocation location) throws IOException {
+		return location.visitIo(directory -> {
+			Path dirPath = fs.getPath(directory);
+
+			try (Stream<Path> paths = Files.list(dirPath)) {
+				return paths.toList();
+			}
+		}, paths -> paths.stream().map(fs::getPath).toList());
 	}
 
 	private void remapPatchedJar(ServiceFactory serviceFactory) throws Exception {
