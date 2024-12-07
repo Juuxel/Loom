@@ -370,19 +370,12 @@ public class MinecraftPatchedProvider {
 		project.getLogger().lifecycle(":access transforming minecraft");
 
 		LoomGradleExtension extension = LoomGradleExtension.get(project);
-		List<Path> atSources = List.of(
-				extension.getForgeUniversalProvider().getForge().toPath(),
-				extension.getForgeUserdevProvider().getUserdevJar().toPath(),
-				((ForgeMinecraftProvider) extension.getMinecraftProvider())
-						.getPatchedProvider()
-						.getMinecraftPatchedIntermediateJar()
-		);
-
+		Path userdevJar = extension.getForgeUserdevProvider().getUserdevJar().toPath();
 		Files.deleteIfExists(target);
 
 		try (var tempFiles = new TempFiles()) {
 			AccessTransformerJarProcessor.executeAt(project, input, target, args -> {
-				for (String atFile : extractAccessTransformers(atSources, extension.getForgeUserdevProvider().getConfig().ats(), tempFiles)) {
+				for (String atFile : extractAccessTransformers(userdevJar, extension.getForgeUserdevProvider().getConfig().ats(), tempFiles)) {
 					args.add("--atFile");
 					args.add(atFile);
 				}
@@ -392,24 +385,22 @@ public class MinecraftPatchedProvider {
 		project.getLogger().lifecycle(":access transformed minecraft in " + stopwatch.stop());
 	}
 
-	private static List<String> extractAccessTransformers(List<Path> atSources, UserdevConfig.AccessTransformerLocation location, TempFiles tempFiles) throws IOException {
+	private static List<String> extractAccessTransformers(Path jar, UserdevConfig.AccessTransformerLocation location, TempFiles tempFiles) throws IOException {
 		final List<String> extracted = new ArrayList<>();
 
-		for (Path jar : atSources) {
-			try (FileSystemUtil.Delegate fs = FileSystemUtil.getJarFileSystem(jar)) {
-				for (Path atFile : getAccessTransformerPaths(fs, location)) {
-					byte[] atBytes;
+		try (FileSystemUtil.Delegate fs = FileSystemUtil.getJarFileSystem(jar)) {
+			for (Path atFile : getAccessTransformerPaths(fs, location)) {
+				byte[] atBytes;
 
-					try {
-						atBytes = Files.readAllBytes(atFile);
-					} catch (NoSuchFileException e) {
-						continue;
-					}
-
-					Path tmpFile = tempFiles.file("at-conf", ".cfg");
-					Files.write(tmpFile, atBytes, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
-					extracted.add(tmpFile.toAbsolutePath().toString());
+				try {
+					atBytes = Files.readAllBytes(atFile);
+				} catch (NoSuchFileException e) {
+					continue;
 				}
+
+				Path tmpFile = tempFiles.file("at-conf", ".cfg");
+				Files.write(tmpFile, atBytes, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
+				extracted.add(tmpFile.toAbsolutePath().toString());
 			}
 		}
 
